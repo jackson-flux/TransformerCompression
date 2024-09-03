@@ -81,7 +81,7 @@ def eval_arg_parser(interactive: bool = True) -> argparse.Namespace:
     parser.add_argument(
         '--tasks',
         nargs='+',
-        default=["piqa", "hellaswag", "arc_easy", "arc_challenge", "winogrande"],
+        default=["piqa", "arc_easy", "arc_challenge", "lambada_openai", "winogrande"],
     )
     parser.add_argument('--num-fewshot', type=int, default=0, help="Number of fewshots for all tasks.")
     parser.add_argument("--save-dir", type=str, default=".", help="Path to save the lm eval results")
@@ -121,6 +121,8 @@ def calculate_avg_accuracy(task_names: str, results: dict) -> float:
 def run_lm_eval(
     hflm: HFLM, task_list: list, fewshot: int, batch_size: int, fraction: float, output_file: str, log_msg: str
 ):
+    if fraction >= 1:
+        fraction = None
     results = lm_eval.simple_evaluate(
         hflm, tasks=task_list, num_fewshot=fewshot, batch_size=batch_size, limit=fraction
     )['results']
@@ -178,13 +180,42 @@ def eval_main(args: argparse.Namespace) -> None:
     run_lm_eval(
         hflm,
         task_list=task_names,
+        fewshot=0,
         batch_size=args.batch_size,
-        fewshot=args.num_fewshot,
         fraction=1,
         output_file=f"{args.save_dir}/lm_eval.json",
         log_msg="LM Eval results (limit=1): ",
     )
 
+    run_lm_eval(
+        hflm,
+        task_list=task_names,
+        fewshot=0,
+        batch_size=args.batch_size,
+        fraction=0.15,
+        output_file=f"{args.save_dir}/lm_eval_sub.json",
+        log_msg="LM Eval results (limit=0.15): ",
+    )
+
+    run_lm_eval(
+        hflm,
+        task_list=['mmlu'],
+        fewshot=5,
+        batch_size=args.batch_size,
+        fraction=1,
+        output_file=f"{args.save_dir}/mmlu_eval.json",
+        log_msg="MMLU Eval results (limit=1): ",
+    )
+
+    run_lm_eval(
+        hflm,
+        task_list=['mmlu'],
+        fewshot=5,
+        batch_size=args.batch_size,
+        fraction=0.15,
+        output_file=f"{args.save_dir}/mmlu_eval_sub.json",
+        log_msg="MMLU Eval results (limit=0.15): ",
+    )
 
 if __name__ == "__main__":
     # Use the logger from lm_eval, adding a file handler to write the log to file
