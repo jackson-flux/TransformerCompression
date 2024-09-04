@@ -34,8 +34,10 @@ TASK_METRIC_MAP = {
     "arc_challenge": "acc_norm,none",
     "arc_easy": "acc_norm,none",
     "hellaswag": "acc_norm,none",
+    "lambada_openai": "acc,none",
     "piqa": "acc_norm,none",
     "winogrande": "acc,none",
+    "wikitext": "word_perplexity,none"
 }
 
 
@@ -81,10 +83,11 @@ def eval_arg_parser(interactive: bool = True) -> argparse.Namespace:
     parser.add_argument(
         '--tasks',
         nargs='+',
-        default=["piqa", "arc_easy", "arc_challenge", "lambada_openai", "winogrande"],
+        default=["piqa", "arc_easy", "arc_challenge", "lambada_openai", "winogrande", "wikitext"],
     )
     parser.add_argument('--num-fewshot', type=int, default=0, help="Number of fewshots for all tasks.")
     parser.add_argument("--save-dir", type=str, default=".", help="Path to save the lm eval results")
+    parser.add_argument("--context-length", type=int, default=4096, help="The context length to use in evaluations. Useful to restrict to 512 for comparison with ONNX exports.")
     return parser.parse_args() if interactive else parser.parse_args('')
 
 
@@ -92,31 +95,6 @@ def process_eval_args(args: argparse.Namespace):
     logging.info(f'Parsed arguments:')
     for arg, argv in vars(args).items():
         logging.info(f'{arg} = {argv}')
-
-
-def calculate_avg_accuracy(task_names: str, results: dict) -> float:
-    n_tasks = len(task_names)
-    acc_cumul = sum(result.get(TASK_METRIC_MAP[task]) for task, result in results.items() if 'mmlu' not in task)
-
-    questions_per_mmlu_task = {
-        task_name: lm_eval.tasks.get_task_dict([task_name])[task_name].dataset["test"].num_rows
-        for task_name in task_names
-        if 'mmlu' in task_name
-    }
-
-    if not questions_per_mmlu_task:
-        return acc_cumul / n_tasks
-
-    # Calculate average accuracy for mmlu tasks, weighted by number of questions in each task
-    acc_mmlu = sum(
-        result.get(TASK_METRIC_MAP[task]) * questions_per_mmlu_task[task]
-        for task, result in results.items()
-        if 'mmlu' in task
-    )
-    acc_mmlu_avg = acc_mmlu / sum(questions_per_mmlu_task.values())
-    wandb.log({'acc_mmlu_avg': acc_mmlu_avg})
-
-    return (acc_cumul + acc_mmlu_avg) / (n_tasks - len(questions_per_mmlu_task) + 1)
 
 def run_lm_eval(
     hflm: HFLM, task_list: list, fewshot: int, batch_size: int, fraction: float, output_file: str, log_msg: str
@@ -126,7 +104,7 @@ def run_lm_eval(
     results = lm_eval.simple_evaluate(
         hflm, tasks=task_list, num_fewshot=fewshot, batch_size=batch_size, limit=fraction
     )['results']
-    metrics = {task: round(result.get('acc_norm,none', result['acc,none']), 4) for task, result in results.items()}
+    metrics = {task: round(result.get(TASK_METRIC_MAP[task]), 4) for task, result in results.items()}
     metrics['acc_avg'] = round(sum(metrics.values()) / len(metrics.values()), 4)
     metrics['num_fewshot'] = fewshot
     metrics['limit'] = fraction
@@ -159,7 +137,7 @@ def eval_main(args: argparse.Namespace) -> None:
     model.tie_weights = lambda: None
 
     ### LM Eval Harness ###
-    hflm = HFLM(pretrained=model, tokenizer=tokenizer, batch_size=args.batch_size)
+    hflm = HFLM(pretrained=model, tokenizer=tokenizer, batch_size=args.batch_size, max_length=args.context_length)
 
     initialize_tasks()
     task_names = lm_eval_utils.pattern_match(args.tasks, ALL_TASKS)
@@ -182,16 +160,6 @@ def eval_main(args: argparse.Namespace) -> None:
         task_list=task_names,
         fewshot=0,
         batch_size=args.batch_size,
-        fraction=1,
-        output_file=f"{args.save_dir}/lm_eval.json",
-        log_msg="LM Eval results (limit=1): ",
-    )
-
-    run_lm_eval(
-        hflm,
-        task_list=task_names,
-        fewshot=0,
-        batch_size=args.batch_size,
         fraction=0.15,
         output_file=f"{args.save_dir}/lm_eval_sub.json",
         log_msg="LM Eval results (limit=0.15): ",
@@ -199,22 +167,32 @@ def eval_main(args: argparse.Namespace) -> None:
 
     run_lm_eval(
         hflm,
-        task_list=['mmlu'],
-        fewshot=5,
+        task_list=task_names,
+        fewshot=0,
         batch_size=args.batch_size,
         fraction=1,
-        output_file=f"{args.save_dir}/mmlu_eval.json",
-        log_msg="MMLU Eval results (limit=1): ",
+        output_file=f"{args.save_dir}/lm_eval.json",
+        log_msg="LM Eval results (limit=1): ",
     )
 
     run_lm_eval(
         hflm,
-        task_list=['mmlu'],
+        task_list=mmlu_tasks,
         fewshot=5,
         batch_size=args.batch_size,
         fraction=0.15,
         output_file=f"{args.save_dir}/mmlu_eval_sub.json",
         log_msg="MMLU Eval results (limit=0.15): ",
+    )
+
+    run_lm_eval(
+        hflm,
+        task_list=mmlu_tasks,
+        fewshot=5,
+        batch_size=args.batch_size,
+        fraction=1,
+        output_file=f"{args.save_dir}/mmlu_eval.json",
+        log_msg="MMLU Eval results (limit=1): ",
     )
 
 if __name__ == "__main__":
