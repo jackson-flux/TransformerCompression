@@ -9,15 +9,14 @@ import os
 import lm_eval
 import torch
 import wandb
-from lm_eval import tasks
 from lm_eval import utils as lm_eval_utils
 from lm_eval.api.registry import ALL_TASKS
 from lm_eval.models.huggingface import HFLM
 from lm_eval.tasks import initialize_tasks
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoTokenizer
 
 from quarot.model_phi35 import Phi3ForCausalLM
-from slicegpt import gpu_utils, hf_utils, utils
+from slicegpt import utils
 from slicegpt.config import config
 
 TASK_METRIC_MAP = {
@@ -87,7 +86,8 @@ def eval_arg_parser(interactive: bool = True) -> argparse.Namespace:
     )
     parser.add_argument('--num-fewshot', type=int, default=0, help="Number of fewshots for all tasks.")
     parser.add_argument("--save-dir", type=str, default=".", help="Path to save the lm eval results")
-    parser.add_argument("--context-length", type=int, default=4096, help="The context length to use in evaluations. Useful to restrict to 512 for comparison with ONNX exports.")
+    parser.add_argument("--context-length", type=int, default=4096,
+                        help="The context length to use in evaluations. Useful to restrict to 512 for comparison with ONNX exports.")
     return parser.parse_args() if interactive else parser.parse_args('')
 
 
@@ -96,8 +96,9 @@ def process_eval_args(args: argparse.Namespace):
     for arg, argv in vars(args).items():
         logging.info(f'{arg} = {argv}')
 
+
 def run_lm_eval(
-    hflm: HFLM, task_list: list, fewshot: int, batch_size: int, fraction: float, output_file: str, log_msg: str
+        hflm: HFLM, task_list: list, fewshot: int, batch_size: int, fraction: float, output_file: str, log_msg: str
 ):
     if fraction >= 1:
         fraction = None
@@ -128,8 +129,8 @@ def eval_main(args: argparse.Namespace) -> None:
         wandb.init(project=args.wandb_project, mode='disabled')
 
     model = Phi3ForCausalLM.from_pretrained(args.model_path, torch_dtype="auto",
-                                                 trust_remote_code=True, local_files_only=True,
-                                                 attn_implementation="flash_attention_2")  # or eager for onnx
+                                            trust_remote_code=True, local_files_only=True,
+                                            attn_implementation="flash_attention_2")  # or eager for onnx
     model.to(config.device)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=True, trust_remote_code=True)
 
@@ -194,6 +195,7 @@ def eval_main(args: argparse.Namespace) -> None:
         output_file=f"{args.save_dir}/mmlu_eval.json",
         log_msg="MMLU Eval results (limit=1): ",
     )
+
 
 if __name__ == "__main__":
     # Use the logger from lm_eval, adding a file handler to write the log to file
