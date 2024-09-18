@@ -322,7 +322,7 @@ def quarot_main(args: argparse.Namespace) -> None:
         raise NotImplementedError("The provided dataset is not supported")
 
     test_loader = data_utils.prepare_test_dataloader(
-        dataset=test_dataset, tokenizer=tokenizer, batch_size=args.ppl_eval_batch_size
+        dataset=test_dataset, tokenizer=tokenizer, batch_size=args.ppl_eval_batch_size, seqlen=512
     )
 
     # original ppl

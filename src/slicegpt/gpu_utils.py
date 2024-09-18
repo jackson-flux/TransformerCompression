@@ -37,7 +37,7 @@ def evaluate_ppl(
     nlls = []
 
     logging.info("Evaluating perplexity...")
-    for batch in testloader:
+    for batch in tqdm(testloader):
         logging.debug(f"Evaluating batch {len(nlls)}")
         batch = utils.map_tensors(batch, config.device)
         logits = model(**batch).logits
