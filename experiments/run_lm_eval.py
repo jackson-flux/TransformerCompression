@@ -16,6 +16,7 @@ from lm_eval.tasks import initialize_tasks
 from transformers import AutoTokenizer
 
 from quarot.model_phi35 import Phi3ForCausalLM
+from quarot.config_phi35 import AttentionType
 from slicegpt import utils
 from slicegpt.config import config
 
@@ -114,7 +115,7 @@ def run_lm_eval(
         json.dump(metrics, f)
 
 
-def eval_main(args: argparse.Namespace) -> None:
+def eval_main(args: argparse.Namespace, attention_type: AttentionType) -> None:
     logging.info("Running SliceGPT LM eval experiment.")
 
     logging.info(f"PyTorch device: {config.device}")
@@ -130,7 +131,7 @@ def eval_main(args: argparse.Namespace) -> None:
 
     model = Phi3ForCausalLM.from_pretrained(args.model_path, torch_dtype="auto",
                                             trust_remote_code=True, local_files_only=True,
-                                            attn_implementation="flash_attention_2")  # or eager for onnx
+                                            attn_implementation="eager", attention_type=attention_type)  # or eager for onnx
     model.to(config.device)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=True, trust_remote_code=True)
 
@@ -206,4 +207,11 @@ if __name__ == "__main__":
 
     eval_args = eval_arg_parser()
     process_eval_args(eval_args)
-    eval_main(eval_args)
+
+    folder_names = ["squish_1_piece", "squish_2_piece", "squish_3_piece", "squish_4_piece", "original"]
+    attention_types = [AttentionType.ONE_PIECE, AttentionType.TWO_PIECE, AttentionType.THREE_PIECE, AttentionType.FOUR_PIECE, AttentionType.ORIGINAL]
+    original_save_dir = eval_args.save_dir
+
+    for folder, atn_type in zip(folder_names, attention_types):
+        eval_args.save_dir = os.path.join(original_save_dir, folder)
+        eval_main(eval_args, atn_type)
