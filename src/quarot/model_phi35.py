@@ -45,7 +45,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 
-from .config_phi35 import Phi3Config
+from .config_phi35 import Phi3Config, AttentionType
 
 logger = logging.get_logger(__name__)
 
@@ -244,6 +244,36 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
+def squishymax(input_weights):
+    shifted = input_weights - torch.max(input_weights, dim=-1, keepdims=True).values
+    linear = (shifted / 5) + 1
+    exps = torch.clamp(linear, min=0)
+    return exps / torch.sum(exps, dim=-1, keepdims=True)
+
+def squishymax_2(input_weights):
+    x_bend = -1.5
+    y_bend = 0.17
+    x_zero = -5
+    a_1 = (1 - y_bend) / -x_bend
+    b_1 = 1
+    a_2 = y_bend / (-x_zero - x_bend)
+    b_2 = -x_zero * a_2
+    shifted = input_weights - torch.max(input_weights, dim=-1, keepdims=True).values
+    linear_1 = torch.clamp(shifted * (a_1 - a_2) + (b_1 - b_2), min=0)
+    linear_2 = torch.clamp(shifted * a_2 + b_2, min=0)
+    exps = linear_1 + linear_2
+    return exps / torch.sum(exps, dim=-1, keepdims=True)
+
+def squishymax_3(input_weights, a_s, b_s):
+    shifted = input_weights - torch.max(input_weights, dim=-1, keepdims=True).values
+    cumulative = torch.zeros_like(shifted)
+    for a, b in zip(a_s, b_s):
+        linear = torch.clamp(a * shifted + b, 0)
+        cumulative = cumulative + linear
+    return cumulative / torch.sum(cumulative, dim=-1, keepdims=True)
+
+
+
 
 class Phi3Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -281,6 +311,27 @@ class Phi3Attention(nn.Module):
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         self.qkv_proj = nn.Linear(self.hidden_size, op_size, bias=False)
         self._init_rope()
+        self.a_s = torch.tensor([0.0285, 0.2117, 0.5210], device="cuda:0")
+        self.b_s = torch.tensor([0.1424, 0.4597, 0.3979], device="cuda:0")
+
+        self.softmax = lambda x: squishymax_3(x, self.a_s, self.b_s)
+        match config.attention_type:
+            case AttentionType.ORIGINAL:
+                self.softmax = lambda x: nn.functional.softmax(x, dim=-1, dtype=torch.float32).to(torch.float16)
+            case AttentionType.ONE_PIECE:
+                self.softmax = lambda x: squishymax(x)
+            case AttentionType.TWO_PIECE:
+                self.a_s = torch.tensor([0.0446, 0.6046], device="cuda:0")
+                self.b_s = torch.tensor([0.2229, 0.7771], device="cuda:0")
+                self.softmax = lambda x: squishymax_3(x, self.a_s, self.b_s)
+            case AttentionType.THREE_PIECE:
+                self.a_s = torch.tensor([0.0285, 0.2117, 0.5210], device="cuda:0")
+                self.b_s = torch.tensor([0.1424, 0.4597, 0.3979], device="cuda:0")
+                self.softmax = lambda x: squishymax_3(x, self.a_s, self.b_s)
+            case AttentionType.FOUR_PIECE:
+                self.a_s = torch.tensor([0.0226, 0.0984, 0.2271, 0.4521], device="cuda:0")
+                self.b_s = torch.tensor([0.1132, 0.2714, 0.3427, 0.2728], device="cuda:0")
+                self.softmax = lambda x: squishymax_3(x, self.a_s, self.b_s)
 
     def _init_rope(self):
         if self.rope_scaling is None:
@@ -356,7 +407,9 @@ class Phi3Attention(nn.Module):
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
+        #attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
+        attn_weights = self.softmax(attn_weights)
+        # attn_weights = squishymax(attn_weights)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
 
         attn_output = torch.matmul(attn_weights, value_states)

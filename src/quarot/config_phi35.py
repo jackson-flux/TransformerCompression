@@ -18,6 +18,7 @@
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
+import enum
 
 logger = logging.get_logger(__name__)
 
@@ -26,6 +27,12 @@ PHI3_PRETRAINED_CONFIG_ARCHIVE_MAP = {
     "microsoft/Phi-3-mini-128k-instruct": "https://huggingface.co/microsoft/Phi-3-mini-128k-instruct/resolve/main/config.json",
 }
 
+class AttentionType(str, enum.Enum):
+    ORIGINAL = "ORIGINAL"
+    ONE_PIECE = "ONE_PIECE"
+    TWO_PIECE = "TWO_PIECE"
+    THREE_PIECE = "THREE_PIECE"
+    FOUR_PIECE = "FOUR_PIECE"
 
 class Phi3Config(PretrainedConfig):
     r"""
@@ -137,6 +144,7 @@ class Phi3Config(PretrainedConfig):
         eos_token_id=32000,
         pad_token_id=32000,
         sliding_window=None,
+        attention_type=AttentionType.ORIGINAL,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -163,6 +171,7 @@ class Phi3Config(PretrainedConfig):
         self._rope_scaling_adjustment()
         self._rope_scaling_validation()
         self.sliding_window = sliding_window
+        self.attention_type = attention_type
 
         super().__init__(
             bos_token_id=bos_token_id,
