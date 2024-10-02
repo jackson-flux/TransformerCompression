@@ -19,6 +19,11 @@ import inspect
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
+import os
+
+import pandas as pd
+import numpy as np
+from collections import defaultdict
 
 import torch
 import torch.nn.functional as F
@@ -244,6 +249,44 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
+class Recorder:
+    def __init__(self, output_directory: str, num_samples_per_layer: int = 1000, num_samples_per_call: int = 10):
+        self._output_filename = os.path.join(output_directory, "samples.csv")
+        self._samples: dict[int, np.ndarray] = dict()
+        self._done = defaultdict(bool)
+        self._num_samples_per_layer = num_samples_per_layer
+        self._num_samples_per_call = num_samples_per_call
+        self._recording = True
+
+
+    def _check_all_done(self):
+        if self._done and all(self._done.values()):
+            logger.info(f"Samples all collected. Saving to file {self._output_filename}")
+            arrs = [ar for ar in self._samples.values()]
+            ar = np.concatenate(arrs)
+            df = pd.DataFrame(data=ar, columns=["Layer", "Value"])
+            df.to_csv(self._output_filename)
+            self._recording = False
+
+
+    def record(self, values: np.ndarray, layer_idx: int):
+        if not self._recording:
+            return
+        sample = np.random.choice(values.reshape(-1), size=(2 * self._num_samples_per_call,), replace=False)
+        sample = sample[sample > -np.inf]
+        label = np.full_like(sample, layer_idx)
+        labelled = np.stack([label, sample], axis=-1)
+        if layer_idx in self._samples:
+            so_far = self._samples[layer_idx]
+            self._samples[layer_idx] = np.concatenate([so_far, labelled])
+        else:
+            self._samples[layer_idx] = labelled
+
+        self._done[layer_idx] = self._samples[layer_idx].shape[0] > self._num_samples_per_layer
+        self._check_all_done()
+
+
+
 def squishymax(input_weights):
     shifted = input_weights - torch.max(input_weights, dim=-1, keepdims=True).values
     linear = (shifted / 5) + 1
@@ -278,10 +321,11 @@ def squishymax_3(input_weights, a_s, b_s):
 class Phi3Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: Phi3Config, layer_idx: Optional[int] = None):
+    def __init__(self, config: Phi3Config, recorder: Recorder, layer_idx: Optional[int] = None):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
+        self.recorder = recorder
         if layer_idx is None:
             logger.warning_once(
                 f"Instantiating {self.__class__.__name__} without passing a `layer_idx` is not recommended and will "
@@ -408,6 +452,8 @@ class Phi3Attention(nn.Module):
 
         # upcast attention to fp32
         #attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
+        shifted = (attn_weights - torch.max(attn_weights, dim=-1, keepdims=True).values).to(torch.float16)
+        self.recorder.record(shifted.detach().to("cpu").numpy(), self.layer_idx)
         attn_weights = self.softmax(attn_weights)
         # attn_weights = squishymax(attn_weights)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
@@ -837,11 +883,11 @@ PHI3_ATTENTION_CLASSES = {
 
 
 class Phi3DecoderLayer(nn.Module):
-    def __init__(self, config: Phi3Config, layer_idx: int):
+    def __init__(self, config: Phi3Config, recorder: Recorder, layer_idx: int):
         super().__init__()
 
         self.config = config
-        self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
+        self.self_attn = Phi3Attention(config, recorder, layer_idx=layer_idx)
 
         self.mlp = Phi3MLP(config)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -1046,10 +1092,12 @@ class Phi3Model(Phi3PreTrainedModel):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
+        self.recorder = Recorder("C:\\data", num_samples_per_layer=1000)
+
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.embed_dropout = nn.Dropout(config.embd_pdrop)
         self.layers = nn.ModuleList(
-            [Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [Phi3DecoderLayer(config, self.recorder, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self._attn_implementation = config._attn_implementation
         self.norm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)

@@ -41,6 +41,7 @@ TASK_METRIC_MAP = {
 }
 
 
+
 def eval_arg_parser(interactive: bool = True) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -129,6 +130,8 @@ def eval_main(args: argparse.Namespace, attention_type: AttentionType) -> None:
         logging.info(f'Failed to initialize wandb: {e}, continuing without wandb')
         wandb.init(project=args.wandb_project, mode='disabled')
 
+
+
     model = Phi3ForCausalLM.from_pretrained(args.model_path, torch_dtype="auto",
                                             trust_remote_code=True, local_files_only=True,
                                             attn_implementation="eager", attention_type=attention_type)  # or eager for onnx
@@ -141,7 +144,6 @@ def eval_main(args: argparse.Namespace, attention_type: AttentionType) -> None:
     ### LM Eval Harness ###
     hflm = HFLM(pretrained=model, tokenizer=tokenizer, batch_size=args.batch_size, max_length=args.context_length)
 
-    initialize_tasks()
     task_names = lm_eval_utils.pattern_match(args.tasks, ALL_TASKS)
 
     mmlu_tasks = [
@@ -157,15 +159,15 @@ def eval_main(args: argparse.Namespace, attention_type: AttentionType) -> None:
         "mmlu_global_facts",
     ]
 
-    run_lm_eval(
-        hflm,
-        task_list=task_names,
-        fewshot=0,
-        batch_size=args.batch_size,
-        fraction=0.15,
-        output_file=f"{args.save_dir}/lm_eval_sub.json",
-        log_msg="LM Eval results (limit=0.15): ",
-    )
+    # run_lm_eval(
+    #     hflm,
+    #     task_list=task_names,
+    #     fewshot=0,
+    #     batch_size=args.batch_size,
+    #     fraction=0.15,
+    #     output_file=f"{args.save_dir}/lm_eval_sub.json",
+    #     log_msg="LM Eval results (limit=0.15): ",
+    # )
 
     run_lm_eval(
         hflm,
@@ -208,8 +210,12 @@ if __name__ == "__main__":
     eval_args = eval_arg_parser()
     process_eval_args(eval_args)
 
-    folder_names = ["squish_1_piece", "squish_2_piece", "squish_3_piece", "squish_4_piece", "original"]
-    attention_types = [AttentionType.ONE_PIECE, AttentionType.TWO_PIECE, AttentionType.THREE_PIECE, AttentionType.FOUR_PIECE, AttentionType.ORIGINAL]
+    initialize_tasks()
+
+    # folder_names = ["squish_1_piece", "squish_2_piece", "squish_3_piece", "squish_4_piece", "original"]
+    # attention_types = [AttentionType.ONE_PIECE, AttentionType.TWO_PIECE, AttentionType.THREE_PIECE, AttentionType.FOUR_PIECE, AttentionType.ORIGINAL]
+    folder_names = ["original"]
+    attention_types = [AttentionType.ORIGINAL]
     original_save_dir = eval_args.save_dir
 
     for folder, atn_type in zip(folder_names, attention_types):
